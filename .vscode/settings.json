@@ -1,0 +1,7 @@
+{
+	"files.associations": {
+		"*.module": "php",
+		"string_view": "cpp",
+		"string": "cpp"
+	}
+}
