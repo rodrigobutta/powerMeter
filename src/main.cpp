@@ -25,8 +25,6 @@ WiFiClient espClient;
 PubSubClient client(espClient);
 // StaticJsonDocument<1200> state;
 
-long refreshPrevMillis = 0;
-
 int statusLedState = LOW;             // statusLedState used to set the LED
 unsigned long statusLedPrevMillis = 0;        // will store last time LED was updated
 
@@ -87,35 +85,11 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   StaticJsonDocument <256> payloadJson;
   deserializeJson(payloadJson,payload);
    
-  if (String(topic) == "esp32/powerMeter/set") {
+  if (String(topic) == "esp32/powerMeter/reset") {
 
-      // if(payloadJson.containsKey(tempKey)) {
-      //   const int tempValue = payloadJson[tempKey];
-      //   if (tempValue) {
-      //     Serial.println(">> Updating TEMPERATURE...");
-      //     state[tempKey] = tempValue;
-      //   }
-      // }
+    pzem.resetEnergy();
 
-      // if(payloadJson.containsKey(modeKey)) {
-      //   const String modeValue = payloadJson[modeKey];
-      //   if (modeValue) {
-      //     if (modeValue.length() > 1) {
-      //       Serial.println(">> Updating MODE...");
-      //       state[modeKey] = modeValue;
-      //     }
-      //   }
-      // }
-
-      // if(payloadJson.containsKey(fanKey)) {
-      //   const String fanValue = payloadJson[fanKey];
-      //   if (fanValue) {
-      //     if (fanValue.length() > 1) {
-      //       Serial.println(">> Updating FAN...");
-      //       state[fanKey] = fanValue;
-      //     }
-      //   }
-      // }
+    mqttSend("esp32/powerMeter/state/reseted", "");
 
     broadcastState();
   }
@@ -131,7 +105,7 @@ void mqttReconnect() {
       Serial.println("MQTT connected");
 
       // Subscribe
-      client.subscribe("esp32/powerMeter/set");
+      client.subscribe("esp32/powerMeter/reset");
 
       if(welcomeBroadcast == false) {
         welcomeBroadcast == true;
@@ -175,11 +149,6 @@ void setup() {
   Serial.begin(115200);
   Serial.println("Rodrigo Butta AC Controller");
 
-
-  // Uncomment in order to reset the internal energy counter
-  // pzem.resetEnergy()
-
-
   wifiSetup();
   mqttSetup();
   
@@ -191,20 +160,6 @@ void setup() {
 
   // Start the DS18B20 sensor
   sensors.begin();
-}
-
-
-void refreshLoop() {
-    // String modeString = state[modeKey];
-    // Serial.print("Mode: ");
-    // Serial.print(modeString);
-    // Serial.println();
-
-    // char tempString[8];
-    // dtostrf(state[tempKey], 1, 2, tempString);
-    // Serial.print("Temperature: ");
-    // Serial.print(tempString);
-    // Serial.println();
 }
 
 
@@ -236,7 +191,6 @@ void powerMeterLoop() {
     Serial.print("Custom Address:");
     Serial.println(pzem.readAddress(), HEX);
 
-    // Read the data from the sensor
     float voltage = pzem.voltage();
     float current = pzem.current();
     float power = pzem.power();
@@ -244,7 +198,6 @@ void powerMeterLoop() {
     float frequency = pzem.frequency();
     float pf = pzem.pf();
 
-    // Check if the data is valid
     if(isnan(voltage)){
         Serial.println("Error reading voltage");
     } else if (isnan(current)) {
@@ -258,8 +211,6 @@ void powerMeterLoop() {
     } else if (isnan(pf)) {
         Serial.println("Error reading power factor");
     } else {
-
-        // Print the values to the Serial console
         Serial.print("Voltage: ");      Serial.print(voltage);      Serial.println("V");
         Serial.print("Current: ");      Serial.print(current);      Serial.println("A");
         Serial.print("Power: ");        Serial.print(power);        Serial.println("W");
@@ -267,6 +218,19 @@ void powerMeterLoop() {
         Serial.print("Frequency: ");    Serial.print(frequency, 1); Serial.println("Hz");
         Serial.print("PF: ");           Serial.println(pf);
 
+        StaticJsonDocument<1200> state;
+        
+        state["voltage"] = round(voltage * 100.0 ) / 100.0;
+        state["current"] = round(current * 100.0 ) / 100.0;
+        state["power"] = round(power * 100.0 ) / 100.0;
+        state["energy"] = round(energy * 100.0 ) / 100.0;
+        state["frequency"] = round(frequency * 100.0 ) / 100.0;
+        state["pf"] = round(pf * 100.0 ) / 100.0;
+
+        char jsonString[256]; // max 256 o no se manda el MQTT!!!!  
+        serializeJson(state, jsonString);
+
+        mqttSend("esp32/powerMeter/state", jsonString);
     }
 
     Serial.println();
@@ -282,11 +246,6 @@ void loop() {
   }
 
   unsigned long currentMillis = millis();
-
-  if (currentMillis - refreshPrevMillis > 5000) {
-    refreshPrevMillis = currentMillis;
-    refreshLoop();
-  }
 
   if (currentMillis - statusLedPrevMillis >= 1000) {
     statusLedPrevMillis = currentMillis;
