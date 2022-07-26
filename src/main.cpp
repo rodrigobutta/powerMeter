@@ -53,6 +53,9 @@ String resetedAt[SENSOR_COUNT];
 
 
 
+int stateUpdateDelay = 4000;
+
+
 unsigned long powerMeterPrevMillis = 0;
 
 
@@ -165,13 +168,20 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
           // Serial.print("The local time direct ");
           // Serial.println(&timeinfo, "%Y-%m-%d %H:%M:%S");
           char resetedAtString[50];
-          strftime(resetedAtString, 50, "%Y-%m-%d %H:%M:%S", &timeinfo);
+          strftime(resetedAtString, 50, "%Y-%m-%dT%H:%M:%S-03:00", &timeinfo);
           resetedAt[i] = resetedAtString;
 
           // Serial.print("Reseted at ");
           // Serial.println(resetedAtString);
         }
 
+      }
+    }
+
+    const int newStateUpdateDelay = payloadJson["updateFrequency"];
+    if (newStateUpdateDelay) {
+      if(newStateUpdateDelay > 500) {
+        stateUpdateDelay = newStateUpdateDelay;
       }
     }
 
@@ -366,7 +376,7 @@ void loop() {
   //   temperatureSensorsLoop();
   // }
 
-  if (currentMillis - powerMeterPrevMillis >= 4000) {
+  if (currentMillis - powerMeterPrevMillis >= stateUpdateDelay) {
     powerMeterPrevMillis = currentMillis;
     powerMeterLoop();
   }
