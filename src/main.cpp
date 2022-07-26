@@ -5,16 +5,40 @@
 #include <string>
 #include <OneWire.h>
 #include <DallasTemperature.h>
+#include "time.h"
 
 #include "settings.h"
 #include "wifiConnection.h"
 #include <PZEM004Tv30.h>
 
+
+
+// TIME
+
+
+const char* ntpServer = "south-america.pool.ntp.org";
+const long  gmtOffset_sec = -10800;
+const int   daylightOffset_sec = 0;
+
+char* lastResetAt = "";
+
+
 #define RXD2 16 
 #define TXD2 17
 
+uint8_t addr1=0x07;
+uint8_t addr2=0x08;
+uint8_t addr3=0x09;
 
-PZEM004Tv30 pzem(Serial2, RXD2, TXD2);
+
+// PZEM004Tv30 pzem(Serial2, RXD2, TXD2, addr1);
+
+PZEM004Tv30 pzem[3] = {
+  PZEM004Tv30(Serial2, RXD2,TXD2, addr1),
+  PZEM004Tv30(Serial2, RXD2,TXD2, addr2),
+  PZEM004Tv30(Serial2, RXD2,TXD2, addr3)
+};
+
 
 unsigned long powerMeterPrevMillis = 0;
 
@@ -87,11 +111,21 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
    
   if (String(topic) == "esp32/powerMeter/reset") {
 
-    pzem.resetEnergy();
+    // pzem.resetEnergy();
 
-    mqttSend("esp32/powerMeter/state/reseted", "");
+    // mqttSend("esp32/powerMeter/state/reseted", "");
 
-    broadcastState();
+    // struct tm timeinfo;
+    // if(!getLocalTime(&timeinfo)){
+    //   Serial.println("Failed to obtain time");
+    //   return;
+    // }
+
+    // // char buff[20];
+    // // time_t now = time(NULL);
+    // strftime(lastResetAt, 20, "%Y-%m-%d %H:%M:%S", &timeinfo);
+
+    // broadcastState();
   }
 
 }
@@ -103,6 +137,8 @@ void mqttReconnect() {
     // Attempt to connect
     if (client.connect("ESP32_POWERMETER",MQTT_USER,MQTT_PASSWORD)) {
       Serial.println("MQTT connected");
+
+      client.setBufferSize(512);
 
       // Subscribe
       client.subscribe("esp32/powerMeter/reset");
@@ -136,6 +172,18 @@ void mqttLoop() {
 }
 
 
+
+void printLocalTime()
+{
+  struct tm timeinfo;
+  if(!getLocalTime(&timeinfo)){
+    Serial.println("Failed to obtain time");
+    return;
+  }
+  Serial.println(&timeinfo, "%A, %B %d %Y %H:%M:%S");
+}
+
+
 // ########################################################
 // MAIN
 // ########################################################
@@ -147,7 +195,7 @@ void setup() {
   digitalWrite(STATUS_LED_GPIO, HIGH);
 
   Serial.begin(115200);
-  Serial.println("Rodrigo Butta AC Controller");
+  Serial.println("Rodrigo Butta PowerMeter");
 
   wifiSetup();
   mqttSetup();
@@ -157,6 +205,10 @@ void setup() {
 
   Serial.print("PIN TEMP SENSOR:");
   Serial.println(oneWireBus);
+
+
+  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+  printLocalTime();
 
   // Start the DS18B20 sensor
   sensors.begin();
@@ -188,15 +240,27 @@ void sensorLoop() {
 
 
 void powerMeterLoop() {
-    Serial.print("Custom Address:");
-    Serial.println(pzem.readAddress(), HEX);
 
-    float voltage = pzem.voltage();
-    float current = pzem.current();
-    float power = pzem.power();
-    float energy = pzem.energy();
-    float frequency = pzem.frequency();
-    float pf = pzem.pf();
+  StaticJsonDocument<1200> state;
+
+  for (int i=0; i<3; i++){  
+
+
+    delay(200);
+    Serial.print("PZEM No. "); Serial.println(i+1);
+
+    Serial.print("Connection Address:");
+    Serial.println(pzem[i].getAddress());
+    
+    Serial.print("Device Address:");
+    Serial.println(pzem[i].readAddress(), HEX);
+
+    float voltage = pzem[i].voltage();
+    float current = pzem[i].current();
+    float power = pzem[i].power();
+    float energy = pzem[i].energy();
+    float frequency = pzem[i].frequency();
+    float pf = pzem[i].pf();
 
     if(isnan(voltage)){
         Serial.println("Error reading voltage");
@@ -218,22 +282,26 @@ void powerMeterLoop() {
         Serial.print("Frequency: ");    Serial.print(frequency, 1); Serial.println("Hz");
         Serial.print("PF: ");           Serial.println(pf);
 
-        StaticJsonDocument<1200> state;
-        
-        state["voltage"] = round(voltage * 100.0 ) / 100.0;
-        state["current"] = round(current * 100.0 ) / 100.0;
-        state["power"] = round(power * 100.0 ) / 100.0;
-        state["energy"] = round(energy * 100.0 ) / 100.0;
-        state["frequency"] = round(frequency * 100.0 ) / 100.0;
-        state["pf"] = round(pf * 100.0 ) / 100.0;
+        // Serial.print("Last Reseted At: "); Serial.println(lastResetAt, "%A, %B %d %Y %H:%M:%S");
+        Serial.print("Last Reseted At: "); Serial.println(lastResetAt);
 
-        char jsonString[256]; // max 256 o no se manda el MQTT!!!!  
-        serializeJson(state, jsonString);
-
-        mqttSend("esp32/powerMeter/state", jsonString);
+        std::string sensorNode = "sensor_" + std::to_string(i);
+        JsonObject values  = state.createNestedObject(sensorNode);
+          values["voltage"] = round(voltage * 100.0 ) / 100.0;
+          values["current"] = round(current * 100.0 ) / 100.0;
+          values["power"] = round(power * 100.0 ) / 100.0;        
+          values["energy"] = round(energy * 100.0 ) / 100.0;
+          values["frequency"] = round(frequency * 100.0 ) / 100.0;
+          values["pf"] = round(pf * 100.0 ) / 100.0;        
     }
 
+    char jsonString[512];
+    serializeJson(state, jsonString);
+
+    mqttSend("esp32/powerMeter/state", jsonString);
+
     Serial.println();
+  }
 }
 
 
@@ -257,7 +325,7 @@ void loop() {
     sensorLoop();
   }
 
-  if (currentMillis - powerMeterPrevMillis >= 2000) {
+  if (currentMillis - powerMeterPrevMillis >= 4000) {
     powerMeterPrevMillis = currentMillis;
     powerMeterLoop();
   }
