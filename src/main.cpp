@@ -20,8 +20,9 @@ const char* ntpServer = "south-america.pool.ntp.org";
 const long  gmtOffset_sec = -10800;
 const int   daylightOffset_sec = 0;
 
-char* lastResetAt = "";
+// char* lastResetAt = "";
 
+#define SENSOR_COUNT 3 
 
 #define RXD2 16 
 #define TXD2 17
@@ -33,13 +34,23 @@ uint8_t addr3=0x09;
 
 // PZEM004Tv30 pzem(Serial2, RXD2, TXD2, addr1);
 
-PZEM004Tv30 pzem[3] = {
+PZEM004Tv30 pzem[SENSOR_COUNT] = {
   PZEM004Tv30(Serial2, RXD2,TXD2, addr1),
   PZEM004Tv30(Serial2, RXD2,TXD2, addr2),
   PZEM004Tv30(Serial2, RXD2,TXD2, addr3)
 };
 
 // StaticJsonDocument<1200> state;
+
+int address[SENSOR_COUNT];
+float voltage[SENSOR_COUNT];
+float current[SENSOR_COUNT];
+float power[SENSOR_COUNT];
+float energy[SENSOR_COUNT];
+float frequency[SENSOR_COUNT];
+float pf[SENSOR_COUNT];
+String resetedAt[SENSOR_COUNT];
+
 
 
 unsigned long powerMeterPrevMillis = 0;
@@ -49,7 +60,6 @@ unsigned long powerMeterPrevMillis = 0;
 
 WiFiClient espClient;
 PubSubClient client(espClient);
-// StaticJsonDocument<1200> state;
 
 int statusLedState = LOW;             // statusLedState used to set the LED
 unsigned long statusLedPrevMillis = 0;        // will store last time LED was updated
@@ -82,13 +92,29 @@ void mqttSend(char* topic, char* message) {
 
 void broadcastState() {
   Serial.println("Broadcasting state to MQTT..");
- 
-  // char jsonString[256]; // max 256 o no se manda el MQTT!!!!  
-  // serializeJson(state, jsonString);
 
-  // mqttSend("esp32/powerMeter/state", jsonString);
+  StaticJsonDocument<1200> state;
 
-  // mqttSend("esp32/powerMeter/state", "{\"temp\":12}");
+  for (int i=0; i < SENSOR_COUNT; i++){  
+
+    std::string sensorNode = "sensor_" + std::to_string(i);
+  
+    JsonObject values  = state.createNestedObject(sensorNode);
+      values["voltage"] = round(voltage[i] * 100.0 ) / 100.0;
+      values["current"] = round(current[i] * 100.0 ) / 100.0;
+      values["power"] = round(power[i] * 100.0 ) / 100.0;
+      values["energy"] = round(energy[i] * 100.0 ) / 100.0;
+      values["frequency"] = round(frequency[i] * 100.0 ) / 100.0;
+      values["pf"] = round(pf[i] * 100.0 ) / 100.0;
+      values["address"] = address[i];
+      values["resetedAt"] = resetedAt[i];
+    
+  }
+
+  char jsonString[512];
+  serializeJson(state, jsonString);
+
+  mqttSend("esp32/powerMeter/state", jsonString);
 }
 
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
@@ -107,13 +133,12 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   payloadString[i] = 0; // Null termination
   Serial.println();
   
-  
   StaticJsonDocument <256> payloadJson;
   deserializeJson(payloadJson,payload);
    
   if (String(topic) == "esp32/powerMeter/set") {
 
-    for(int i=0; i<=2; i++){
+    for(int i=0; i < SENSOR_COUNT; i++){
 
       std::string sensorKey = "sensor_" + std::to_string(i);
       // Serial.print("sensorKey ");
@@ -128,7 +153,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
           Serial.print("Reseting sensor ");
           Serial.println(i);
           
-          // pzem[sensorKey].resetEnergy();
+          pzem[i].resetEnergy();
 
           // mqttSend("esp32/powerMeter/state/reseted", "");
 
@@ -136,28 +161,21 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
           if(!getLocalTime(&timeinfo)){
             Serial.println("Failed to obtain time");
             return;
-          }
-          
-          Serial.print("The local time direct ");
-          Serial.println(&timeinfo, "%Y-%m-%d %H:%M:%S");
+          }          
+          // Serial.print("The local time direct ");
+          // Serial.println(&timeinfo, "%Y-%m-%d %H:%M:%S");
+          char resetedAtString[50];
+          strftime(resetedAtString, 50, "%Y-%m-%d %H:%M:%S", &timeinfo);
+          resetedAt[i] = resetedAtString;
 
-
-          char dateString[50];
-          strftime(dateString, 50, "%Y-%m-%d %H:%M:%S", &timeinfo);
-
-          Serial.print("Reseted at ");
-          Serial.println(dateString);
-
-          
-          
-
+          // Serial.print("Reseted at ");
+          // Serial.println(resetedAtString);
         }
 
       }
     }
 
-    
-    // broadcastState();
+    broadcastState();
   }
 
 }
@@ -175,17 +193,17 @@ void mqttReconnect() {
       // Subscribe
       client.subscribe("esp32/powerMeter/set");
 
-      if(welcomeBroadcast == false) {
-        welcomeBroadcast == true;
-        broadcastState();
-      }
+      // if(welcomeBroadcast == false) {
+      //   welcomeBroadcast == true;
+      //   broadcastState();
+      // }
       
     } else {
       Serial.print("failed, rc=");
       Serial.print(client.state());
       Serial.println(" try again in 5 seconds");
       // Wait 5 seconds before retrying
-      delay(10000);
+      delay(5000);
     }
   }
 }
@@ -218,6 +236,24 @@ void printLocalTime()
 }
 
 
+void stateSetup () {
+
+  for (int i=0; i < SENSOR_COUNT; i++){  
+
+    voltage[i] = 0;
+    current[i] = 0;
+    power[i] = 0;
+    energy[i] = 0;
+    frequency[i] = 0;
+    pf[i] = 0;
+
+    address[i] = -1;
+    resetedAt[i] = "";
+
+  }
+}
+
+
 // ########################################################
 // MAIN
 // ########################################################
@@ -233,6 +269,9 @@ void setup() {
 
   wifiSetup();
   mqttSetup();
+
+
+  stateSetup();
   
   Serial.print("PIN STATUS:");
   Serial.println(STATUS_LED_GPIO);
@@ -275,54 +314,35 @@ void temperatureSensorsLoop() {
 
 void powerMeterLoop() {
 
-  StaticJsonDocument<1200> state;
-
-  for (int i=0; i<=2; i++){  
-
+  for (int i=0; i < SENSOR_COUNT; i++){  
     // delay(200);
     // Serial.print("PZEM No. "); Serial.println(i+1);
-
     // Serial.print("Connection Address:");
     // Serial.println(pzem[i].getAddress());
-    
     // Serial.print("Device Address:");
     // Serial.println(pzem[i].readAddress(), HEX);
 
-    float voltage = pzem[i].voltage();
-    float current = pzem[i].current();
-    float power = pzem[i].power();
-    float energy = pzem[i].energy();
-    float frequency = pzem[i].frequency();
-    float pf = pzem[i].pf();
+    float voltageMeasured = pzem[i].voltage();
+    float currentMeasured = pzem[i].current();
+    float powerMeasured = pzem[i].power();
+    float energyMeasured = pzem[i].energy();
+    float frequencyMeasured = pzem[i].frequency();
+    float pfMeasured = pzem[i].pf();
 
-    if(isnan(voltage)){
-        Serial.println("Error reading sensor");
+    if(isnan(voltageMeasured)){
+      Serial.println("Error reading sensor");
     } else {
-        // Serial.print("Voltage: ");      Serial.print(voltage);      Serial.println("V");
-        // Serial.print("Current: ");      Serial.print(current);      Serial.println("A");
-        // Serial.print("Power: ");        Serial.print(power);        Serial.println("W");
-        // Serial.print("Energy: ");       Serial.print(energy,3);     Serial.println("kWh");
-        // Serial.print("Frequency: ");    Serial.print(frequency, 1); Serial.println("Hz");
-        // Serial.print("PF: ");           Serial.println(pf);
-
-        // // Serial.print("Last Reseted At: "); Serial.println(lastResetAt, "%A, %B %d %Y %H:%M:%S");
-        // Serial.print("Last Reseted At: "); Serial.println(lastResetAt);
-
-        std::string sensorNode = "sensor_" + std::to_string(i);
-        JsonObject values  = state.createNestedObject(sensorNode);
-          values["voltage"] = round(voltage * 100.0 ) / 100.0;
-          values["current"] = round(current * 100.0 ) / 100.0;
-          values["power"] = round(power * 100.0 ) / 100.0;        
-          values["energy"] = round(energy * 100.0 ) / 100.0;
-          values["frequency"] = round(frequency * 100.0 ) / 100.0;
-          values["pf"] = round(pf * 100.0 ) / 100.0;        
+      address[i] = pzem[i].readAddress();
+      voltage[i] = voltageMeasured;
+      current[i] = currentMeasured;
+      power[i] = powerMeasured;
+      energy[i] = energyMeasured;
+      frequency[i] = frequencyMeasured;
+      pf[i] = pfMeasured;
     }
-
-    char jsonString[512];
-    serializeJson(state, jsonString);
-
-    // mqttSend("esp32/powerMeter/state", jsonString);
   }
+
+  broadcastState();
 }
 
 
