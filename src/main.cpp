@@ -3,8 +3,6 @@
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
 #include <string>
-#include <OneWire.h>
-#include <DallasTemperature.h>
 #include "time.h"
 
 #include "settings.h"
@@ -12,13 +10,6 @@
 #include <PZEM004Tv30.h>
 
 
-
-// TIME
-
-
-const char* ntpServer = "south-america.pool.ntp.org";
-const long  gmtOffset_sec = -10800;
-const int   daylightOffset_sec = 0;
 
 // char* lastResetAt = "";
 
@@ -67,21 +58,6 @@ PubSubClient client(espClient);
 int statusLedState = LOW;             // statusLedState used to set the LED
 unsigned long statusLedPrevMillis = 0;        // will store last time LED was updated
 
-
-// #############################
-// ######## TEMP SENSOR ########
-// #############################
-
-// GPIO where the DS18B20 is connected to
-const int oneWireBus = 4;     
-
-// Setup a oneWire instance to communicate with any OneWire devices
-OneWire oneWire(oneWireBus);
-
-// Pass our oneWire reference to Dallas Temperature sensor 
-DallasTemperature temperatureSensors(&oneWire);
-
-unsigned long sensorPrevMillis = 0;
 
 
 
@@ -190,8 +166,12 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
 
 }
 
-void mqttReconnect() {
-  // Loop until we're reconnected
+
+
+void mqttSetup() {
+  client.setServer(MQTT_HOST, 1883);
+  client.setCallback(mqttCallback);
+
   while (!client.connected()) {
     Serial.print("Attempting MQTT connection...");
     // Attempt to connect
@@ -211,38 +191,14 @@ void mqttReconnect() {
     } else {
       Serial.print("failed, rc=");
       Serial.print(client.state());
-      Serial.println(" try again in 5 seconds");
-      // Wait 5 seconds before retrying
-      delay(5000);
+      Serial.println(" try again in 10 seconds");
+      delay(10000);
     }
   }
 }
 
-
-void mqttSetup() {
-  client.setServer(MQTT_HOST, 1883);
-  client.setCallback(mqttCallback);
-}
-
 void mqttLoop() {
-  if (!client.connected()) {
-    mqttReconnect();
-  }
   client.loop();
-}
-
-
-
-void printLocalTime()
-{
-  struct tm timeinfo;
-  if(!getLocalTime(&timeinfo)){
-    Serial.println("Failed to obtain time");
-    return;
-  }
-
-  Serial.print("Local time is: ");
-  Serial.println(&timeinfo, "%A, %B %d %Y %H:%M:%S");
 }
 
 
@@ -285,16 +241,6 @@ void setup() {
   
   Serial.print("PIN STATUS:");
   Serial.println(STATUS_LED_GPIO);
-
-  Serial.print("PIN TEMP SENSOR:");
-  Serial.println(oneWireBus);
-
-
-  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
-  printLocalTime();
-
-  // Start the DS18B20 sensor
-  temperatureSensors.begin();
 }
 
 
@@ -309,18 +255,6 @@ void statusLedLoop() {
   digitalWrite(STATUS_LED_GPIO, statusLedState);
 
 }
-
-
-void temperatureSensorsLoop() {
-
-  // temperatureSensors.requestTemperatures(); 
-  // float temperatureC = temperatureSensors.getTempCByIndex(0);
-  // // float temperatureF = temperatureSensors.getTempFByIndex(0);
-  // Serial.print(temperatureC);
-  // Serial.println("ºC");
-
-}
-
 
 void powerMeterLoop() {
 
@@ -357,24 +291,17 @@ void powerMeterLoop() {
 
 
 void loop() {
-  mqttLoop();
-
-  long interval = 2000;
-  if(!client.connected()) {
-    interval = 300;
+  if (!client.connected()) {
+    esp_restart();
   }
 
-  unsigned long currentMillis = millis();
+  mqttLoop();
 
+  unsigned long currentMillis = millis();
   if (currentMillis - statusLedPrevMillis >= 1000) {
     statusLedPrevMillis = currentMillis;
     statusLedLoop();
   }
-
-  // if (currentMillis - sensorPrevMillis >= 5000) {
-  //   sensorPrevMillis = currentMillis;
-  //   temperatureSensorsLoop();
-  // }
 
   if (currentMillis - powerMeterPrevMillis >= stateUpdateDelay) {
     powerMeterPrevMillis = currentMillis;
